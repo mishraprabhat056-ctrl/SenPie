@@ -17,6 +17,9 @@ import {
   Sparkles,
   Table as TableIcon,
   TrendingUp,
+  Download,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +42,7 @@ type DbInfo = {
   name: string | null;
   table_count: number;
   row_count: number;
+  error?: string;
 };
 
 const formatCount = (n: number) =>
@@ -56,18 +60,128 @@ const CHART_OPTIONS: { type: ChartType; label: string; icon: React.ReactNode }[]
   { type: "heatmap", label: "Heatmap", icon: <Grid3X3 className="h-3.5 w-3.5" /> },
 ];
 
-type VizMode = "auto" | ChartType;
-
-// Auto mode: pick a sensible chart type from the wording of the question
-const pickAutoChartType = (query: string, fallback: ChartType): ChartType => {
-  const q = query.toLowerCase();
-  if (/(trend|over time|growth|monthly|weekly|daily|timeline)/.test(q)) return "line";
-  if (/(cumulative|running total|stacked|accumulat)/.test(q)) return "area";
-  if (/(share|proportion|percent|breakdown|split|composition|mix)/.test(q)) return "pie";
-  if (/(correlat|heatmap|density|intensity|concentration|pipeline)/.test(q)) return "heatmap";
-  if (/(compare|comparison|versus|region|rank|top|perform|target)/.test(q)) return "bar";
-  return fallback;
+type TableColumn = { key: string; label: string; numeric: boolean };
+type TableData = {
+  title?: string;
+  columns: TableColumn[];
+  rows: Record<string, unknown>[];
+  total_rows: number;
+  capped: boolean;
 };
+type CanvasTab = "charts" | "table";
+
+const formatCell = (value: unknown, numeric: boolean) => {
+  if (value === null || value === undefined) return "—";
+  if (numeric && typeof value === "number") {
+    return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+  return String(value);
+};
+
+function ResultTable({ data }: { data: TableData }) {
+  const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);
+
+  const rows = React.useMemo(() => {
+    if (!sort) return data.rows;
+    const col = data.columns.find((c) => c.key === sort.key);
+    const sorted = [...data.rows].sort((a, b) => {
+      const av = a[sort.key];
+      const bv = b[sort.key];
+      if (av === null || av === undefined) return 1;
+      if (bv === null || bv === undefined) return -1;
+      return col?.numeric
+        ? Number(av) - Number(bv)
+        : String(av).localeCompare(String(bv));
+    });
+    return sort.dir === "asc" ? sorted : sorted.reverse();
+  }, [data, sort]);
+
+  const toggleSort = (key: string) =>
+    setSort((prev) =>
+      prev?.key === key
+        ? prev.dir === "asc"
+          ? { key, dir: "desc" }
+          : null
+        : { key, dir: "asc" }
+    );
+
+  const downloadCsv = () => {
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = [
+      data.columns.map((c) => esc(c.label)).join(","),
+      ...rows.map((r) => data.columns.map((c) => esc(r[c.key])).join(",")),
+    ].join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "senpie-result.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] text-zinc-500 font-mono">
+          {data.total_rows} rows{data.capped ? " (capped)" : ""} • click a header to sort
+        </p>
+        <button
+          type="button"
+          onClick={downloadCsv}
+          className="inline-flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-300 hover:border-zinc-700 hover:text-zinc-100 transition-colors"
+        >
+          <Download className="h-3.5 w-3.5" />
+          CSV
+        </button>
+      </div>
+      <div className="max-h-[460px] overflow-auto rounded-lg border border-zinc-800">
+        <table className="w-full border-collapse text-xs">
+          <thead className="sticky top-0 bg-zinc-900">
+            <tr>
+              {data.columns.map((col) => (
+                <th
+                  key={col.key}
+                  onClick={() => toggleSort(col.key)}
+                  className={`cursor-pointer select-none whitespace-nowrap border-b border-zinc-800 px-3 py-2 font-medium text-zinc-300 hover:text-white ${
+                    col.numeric ? "text-right" : "text-left"
+                  }`}
+                >
+                  <span className="inline-flex items-center gap-1">
+                    {col.label}
+                    {sort?.key === col.key &&
+                      (sort.dir === "asc" ? (
+                        <ArrowUp className="h-3 w-3 text-indigo-400" />
+                      ) : (
+                        <ArrowDown className="h-3 w-3 text-indigo-400" />
+                      ))}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i} className="border-b border-zinc-800/60 hover:bg-zinc-900/60">
+                {data.columns.map((col) => (
+                  <td
+                    key={col.key}
+                    className={`px-3 py-2 text-zinc-300 ${
+                      col.numeric ? "text-right font-mono" : "text-left"
+                    }`}
+                  >
+                    {formatCell(row[col.key], col.numeric)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+type VizMode = "auto" | ChartType;
 
 const WELCOME_MESSAGE: ChatMessage = {
   id: "welcome-1",
@@ -87,6 +201,8 @@ export default function SenPieDashboard() {
   const [dbInfo, setDbInfo] = useState<DbInfo | null>(null);
   const [kpis, setKpis] = useState<Kpi[]>([]);
   const [kpisLoading, setKpisLoading] = useState(true);
+  const [tableData, setTableData] = useState<TableData | null>(null);
+  const [canvasTab, setCanvasTab] = useState<CanvasTab>("charts");
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
 
   // ---- Load the real database info + headline metrics ----
@@ -165,17 +281,18 @@ export default function SenPieDashboard() {
 
       setMessages((prev) => [...prev, aiReply]);
 
-      // Replace the canvas data with live rows from the database
-      if (data.chart) {
-        setChartConfig(data.chart as ChartConfig);
+      // Show the result as a chart, a table, or just text, as the backend decided
+      if (data.table || data.chart) {
+        setChartConfig((data.chart as ChartConfig) ?? null);
+        setTableData((data.table as TableData) ?? null);
+        setCanvasTab(data.display === "chart" ? "charts" : "table");
       }
 
-      // Auto mode: use the backend's suggestion if valid, else infer from the question
-      if (vizMode === "auto") {
-        const fromServer = CHART_OPTIONS.find((o) => o.type === (data.chart?.type ?? data.chart_type))?.type;
-        setSelectedChartType(
-          fromServer ?? pickAutoChartType(userQuery, selectedChartType)
-        );
+      // Keep the dropdown and canvas in sync with the chart type actually drawn
+      const serverType = CHART_OPTIONS.find((o) => o.type === data.chart?.type)?.type;
+      if (serverType) {
+        setSelectedChartType(serverType);
+        if (vizMode !== "auto" && vizMode !== serverType) setVizMode(serverType);
       }
     } catch (error) {
       console.error("Backend connection error:", error);
@@ -246,7 +363,7 @@ export default function SenPieDashboard() {
               <p className="text-zinc-500 mt-0.5 font-mono text-[11px]">
                 {dbInfo?.connected
                   ? `${dbInfo.table_count} tables • ${formatCount(dbInfo.row_count)} rows`
-                  : "Check DATABASE_URL in backend/.env"}
+                  : dbInfo?.error ?? "Check DATABASE_URL in backend/.env"}
               </p>
             </div>
           </div>
@@ -258,6 +375,8 @@ export default function SenPieDashboard() {
             onClick={() => {
               setMessages([WELCOME_MESSAGE]);
               setChartConfig(null);
+              setTableData(null);
+              setCanvasTab("charts");
             }}
             className="w-full justify-start gap-2 border-zinc-800 bg-zinc-900/50 text-zinc-300 hover:bg-zinc-800 hover:text-white"
           >
@@ -282,7 +401,11 @@ export default function SenPieDashboard() {
             </Badge>
           </div>
 
-          <Tabs defaultValue="charts" className="w-auto">
+          <Tabs
+            value={canvasTab}
+            onValueChange={(v) => setCanvasTab(v as CanvasTab)}
+            className="w-auto"
+          >
             <TabsList className="bg-zinc-900 border border-zinc-800 h-8">
               <TabsTrigger value="charts" className="text-xs gap-1.5 h-6">
                 <TrendingUp className="h-3.5 w-3.5" />
@@ -325,15 +448,20 @@ export default function SenPieDashboard() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-zinc-800/70">
                 <div>
                   <h2 className="text-sm font-semibold text-zinc-100">
-                    {chartConfig?.title ?? "Visualization"}
+                    {canvasTab === "table"
+                      ? tableData?.title ?? "Query Result"
+                      : chartConfig?.title ?? "Visualization"}
                   </h2>
                   <p className="text-xs text-zinc-400 mt-0.5">
-                    {chartConfig?.description ??
-                      "Ask a question in the chat and your chart will appear here."}
+                    {canvasTab === "table" && tableData
+                      ? `${tableData.total_rows} rows${tableData.capped ? " (capped)" : ""}`
+                      : chartConfig?.description ??
+                        "Ask a question in the chat and your chart will appear here."}
                   </p>
                 </div>
 
                 {/* Interactive Visualization Selector Pill Bar */}
+                {canvasTab === "charts" && (
                 <div className="inline-flex items-center rounded-lg border border-zinc-800 bg-zinc-950 p-1 gap-1 self-start">
                   {CHART_OPTIONS.map((option) => {
                     const isActive = selectedChartType === option.type;
@@ -363,11 +491,14 @@ export default function SenPieDashboard() {
                     );
                   })}
                 </div>
+                )}
               </div>
 
               {/* Dynamic Visualization Output */}
               <div className="pt-6">
-                {chartConfig ? (
+                {canvasTab === "table" && tableData ? (
+                  <ResultTable data={tableData} />
+                ) : chartConfig ? (
                   <DynamicVisualizer
                     config={chartConfig}
                     activeType={selectedChartType}
@@ -376,7 +507,9 @@ export default function SenPieDashboard() {
                   <div className="flex h-72 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-800 text-center">
                     <Sparkles className="h-5 w-5 text-indigo-400" />
                     <p className="text-xs text-zinc-400">
-                      No visualization yet. Ask SenPie Maestro a question about your data.
+                      {tableData
+                        ? "This result reads better as a table. Open the Data Grid tab to see it."
+                        : "No visualization yet. Ask SenPie Maestro a question about your data."}
                     </p>
                   </div>
                 )}

@@ -128,7 +128,7 @@ def get_db_stats() -> Dict[str, Any]:
     """Connection status, database name, table count and row count for the sidebar."""
     empty = {"connected": False, "name": None, "table_count": 0, "row_count": 0}
     if engine is None:
-        return empty
+        return {**empty, "error": "DATABASE_URL is not set in backend/.env"}
     try:
         info = get_schema_info()
         with engine.connect() as conn:
@@ -164,8 +164,9 @@ def get_db_stats() -> Dict[str, Any]:
             "table_count": info["table_count"],
             "row_count": total,
         }
-    except Exception:
-        return empty
+    except Exception as exc:
+        reason = str(getattr(exc, "orig", exc)).splitlines()[0]
+        return {**empty, "error": reason}
 
 
 # ---------------------------------------------------------------- safety ----
